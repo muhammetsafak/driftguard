@@ -25,20 +25,25 @@ Usage:
 Run "driftguard <command> -h" for command flags.`
 
 func main() {
-	if len(os.Args) < 2 {
+	os.Exit(run(os.Args[1:]))
+}
+
+func run(args []string) int {
+	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, usage)
-		os.Exit(2)
+		return 2
 	}
-	switch os.Args[1] {
+	switch args[0] {
 	case "check":
-		os.Exit(runCheck(os.Args[2:]))
+		return runCheck(args[1:])
 	case "seed":
-		os.Exit(runSeed(os.Args[2:]))
+		return runSeed(args[1:])
 	case "-h", "--help", "help":
 		fmt.Println(usage)
+		return 0
 	default:
-		fmt.Fprintf(os.Stderr, "driftguard: unknown command %q\n\n%s\n", os.Args[1], usage)
-		os.Exit(2)
+		fmt.Fprintf(os.Stderr, "driftguard: unknown command %q\n\n%s\n", args[0], usage)
+		return 2
 	}
 }
 
