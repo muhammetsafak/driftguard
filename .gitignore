@@ -1,0 +1,11 @@
+# Local environment — never commit real values
+.env
+.env.local
+
+# Build output
+/driftguard
+/dist/
+
+# Go
+*.test
+*.out
