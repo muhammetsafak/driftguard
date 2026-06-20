@@ -66,17 +66,81 @@ func newFile() *File {
 	return &File{Values: map[string]string{}, set: map[string]struct{}{}}
 }
 
-// Sanitize strips stray carriage returns and trailing whitespace from each line
-// and reports how many lines it changed. This is the cleanup hosting providers and
-// hand-edited .env files most often need before a strict loader will accept them.
+// invisibleRunes are codepoints that carry no visible meaning in a .env file but
+// routinely sneak in via copy-paste from chat apps, docs, and rich-text editors, then
+// silently corrupt a key or value so a strict loader either rejects the file or reads
+// a subtly wrong name. We strip these outright wherever they appear on a line:
+//
+//	U+FEFF  ZERO WIDTH NO-BREAK SPACE / BOM (also handled as a leading BOM below)
+//	U+200B  ZERO WIDTH SPACE
+//	U+200C  ZERO WIDTH NON-JOINER
+//	U+200D  ZERO WIDTH JOINER
+//	U+2060  WORD JOINER
+//
+// NBSP (U+00A0) is deliberately NOT stripped: unlike the zero-widths it is visible as a
+// space, a user may have typed it intentionally inside a value, and silently deleting it
+// would change content the author can see. We leave NBSP untouched on purpose.
+// Written as \u escapes on purpose: literal invisible bytes in source are unreviewable
+// and a raw U+FEFF is rejected by the Go tokenizer as an "illegal byte order mark".
+var invisibleRunes = map[rune]struct{}{
+	'\uFEFF': {}, // ZERO WIDTH NO-BREAK SPACE / BOM
+	'\u200B': {}, // ZERO WIDTH SPACE
+	'\u200C': {}, // ZERO WIDTH NON-JOINER
+	'\u200D': {}, // ZERO WIDTH JOINER
+	'\u2060': {}, // WORD JOINER
+}
+
+// bom is the UTF-8 byte-order mark. A leading BOM is invisible but makes the first key
+// parse as "<BOM>KEY", so a strict loader never sees the variable the author intended.
+const bom = "\uFEFF"
+
+// Sanitize normalizes a .env file's bytes so a strict loader will accept it without
+// changing any visible content. It reports how many lines it altered. Three classes of
+// damage are cleaned, each one a real-world copy-paste/hosting hazard:
+//
+//   - A leading UTF-8 BOM, stripped once from the very start of the file.
+//   - Zero-width / invisible codepoints anywhere on a line (see invisibleRunes), which
+//     corrupt keys and values without being visible to the person who pasted them.
+//   - Stray carriage returns and trailing space/tab, the classic CRLF / hand-edit noise.
+//
+// It is intentionally conservative: it only removes a fixed allow-list of known-invisible
+// codepoints and trailing whitespace, never touching legitimate visible content (NBSP
+// included — see invisibleRunes).
 func Sanitize(content string) (cleaned string, fixed int) {
 	lines := strings.Split(content, "\n")
 	for i, l := range lines {
-		clean := strings.TrimRight(l, " \t\r")
+		clean := l
+		if i == 0 {
+			// A leading BOM lives at the very start of the file, i.e. the head of the
+			// first line; strip it here so a BOM-only change still counts as one fixed
+			// line rather than slipping past the per-line comparison below.
+			clean = strings.TrimPrefix(clean, bom)
+		}
+		clean = stripInvisible(clean)
+		clean = strings.TrimRight(clean, " \t\r")
 		if clean != l {
 			fixed++
 		}
 		lines[i] = clean
 	}
 	return strings.Join(lines, "\n"), fixed
+}
+
+// stripInvisible removes every zero-width / invisible rune from a single line, leaving
+// all other characters (including NBSP and ordinary whitespace) exactly as they were.
+func stripInvisible(line string) string {
+	if !strings.ContainsFunc(line, isInvisible) {
+		return line
+	}
+	return strings.Map(func(r rune) rune {
+		if isInvisible(r) {
+			return -1
+		}
+		return r
+	}, line)
+}
+
+func isInvisible(r rune) bool {
+	_, ok := invisibleRunes[r]
+	return ok
 }

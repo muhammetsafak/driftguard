@@ -19,8 +19,9 @@ import (
 const usage = `driftguard — keep .env.example in sync with the keys your code reads
 
 Usage:
-  driftguard check [flags] [dir]   audit env drift; exit 1 on used-but-undeclared keys
-  driftguard seed  [flags] [dir]   CI helper: write a placeholder .env when it is missing
+  driftguard check    [flags] [dir]     audit env drift; exit 1 on used-but-undeclared keys
+  driftguard seed     [flags] [dir]     CI helper: write a placeholder .env when it is missing
+  driftguard sanitize [flags] <files>   strip BOM / zero-width / CRLF / trailing-WS noise
 
 Run "driftguard <command> -h" for command flags.`
 
@@ -38,6 +39,8 @@ func run(args []string) int {
 		return runCheck(args[1:])
 	case "seed":
 		return runSeed(args[1:])
+	case "sanitize":
+		return runSanitize(args[1:])
 	case "-h", "--help", "help":
 		fmt.Println(usage)
 		return 0
@@ -155,6 +158,60 @@ func runSeed(args []string) int {
 	}
 	fmt.Fprintf(os.Stdout, "Wrote %s with %d placeholder key(s) so the build won't crash on a missing env file.\n", *envPath, len(keys))
 	return 0
+}
+
+// runSanitize cleans one or more .env-style files of BOM / zero-width / CRLF /
+// trailing-whitespace noise. By default it rewrites each dirty file in place; with
+// --check it touches nothing and instead reports what WOULD change, exiting 1 if any
+// file is dirty so CI can gate on it (mirroring check's "1 = drift found" convention).
+func runSanitize(args []string) int {
+	fs := flag.NewFlagSet("sanitize", flag.ExitOnError)
+	checkOnly := fs.Bool("check", false, "report what would change without writing; exit 1 if any file is dirty")
+	_ = fs.Parse(args)
+
+	files := fs.Args()
+	if len(files) == 0 {
+		return fail("sanitize: no files given; usage: driftguard sanitize [--check] <files...>")
+	}
+
+	out := os.Stdout
+	dirty := 0
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fail("read %s: %v", path, err)
+		}
+		cleaned, fixed := envfile.Sanitize(string(data))
+		if fixed == 0 && cleaned == string(data) {
+			fmt.Fprintf(out, "clean   %s\n", path)
+			continue
+		}
+		dirty++
+		if *checkOnly {
+			fmt.Fprintf(out, "would clean %s (%d line(s))\n", path, fixed)
+			continue
+		}
+		if err := os.WriteFile(path, []byte(cleaned), filePerm(path)); err != nil {
+			return fail("write %s: %v", path, err)
+		}
+		fmt.Fprintf(out, "cleaned %s (%d line(s))\n", path, fixed)
+	}
+
+	if *checkOnly && dirty > 0 {
+		fmt.Fprintf(out, "\n%d file(s) need sanitizing; run without --check to fix.\n", dirty)
+		return 1
+	}
+	return 0
+}
+
+// filePerm returns the file's current mode so an in-place rewrite preserves it, falling
+// back to a conservative 0600 if the file can't be stat-ed (it was just read, so this is
+// only a belt-and-suspenders guard against a race).
+func filePerm(path string) os.FileMode {
+	if fi, err := os.Stat(path); err == nil {
+		return fi.Mode().Perm()
+	}
+	return 0o600
 }
 
 // renderPlaceholder emits `KEY=` lines with EMPTY values: present enough to satisfy a

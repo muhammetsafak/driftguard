@@ -161,6 +161,84 @@ func TestSeed_NoKeys(t *testing.T) {
 	}
 }
 
+func TestSanitize_NoFiles(t *testing.T) {
+	if c := runSanitize(nil); c != 2 {
+		t.Fatalf("no files → 2 (usage error), got %d", c)
+	}
+}
+
+func TestSanitize_ReadError(t *testing.T) {
+	// point at a path that does not exist → read error → exit 2
+	if c := runSanitize([]string{filepath.Join(t.TempDir(), "nope.env")}); c != 2 {
+		t.Fatalf("unreadable file → 2, got %d", c)
+	}
+}
+
+func TestSanitize_WritesInPlace(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".env")
+	write(t, p, "\uFEFFFOO=1 \r\nBAR=2\t\n")
+	if c := runSanitize([]string{p}); c != 0 {
+		t.Fatalf("sanitize dirty file → 0, got %d", c)
+	}
+	body, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "FOO=1\nBAR=2\n" {
+		t.Fatalf("file not cleaned in place: %q", body)
+	}
+}
+
+func TestSanitize_CheckDirtyIsNonZeroAndDoesNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".env")
+	original := "FOO=1 \r\n"
+	write(t, p, original)
+	if c := runSanitize([]string{"--check", p}); c != 1 {
+		t.Fatalf("--check on dirty file → 1, got %d", c)
+	}
+	body, _ := os.ReadFile(p)
+	if string(body) != original {
+		t.Fatalf("--check must not modify the file, got %q", body)
+	}
+}
+
+func TestSanitize_CleanFileIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".env")
+	clean := "FOO=1\nBAR=2\n"
+	write(t, p, clean)
+	if c := run([]string{"sanitize", p}); c != 0 {
+		t.Fatalf("clean file → 0, got %d", c)
+	}
+	if c := runSanitize([]string{"--check", p}); c != 0 {
+		t.Fatalf("--check on clean file → 0, got %d", c)
+	}
+	body, _ := os.ReadFile(p)
+	if string(body) != clean {
+		t.Fatalf("clean file must be untouched, got %q", body)
+	}
+}
+
+func TestSanitize_PreservesFileMode(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".env")
+	if err := os.WriteFile(p, []byte("FOO=1 \n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if c := runSanitize([]string{p}); c != 0 {
+		t.Fatalf("sanitize → 0, got %d", c)
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o640 {
+		t.Fatalf("file mode not preserved: got %o, want 0640", got)
+	}
+}
+
 func TestHelpers(t *testing.T) {
 	if got := union([]string{"a", "b"}, []string{"b", "c"}); len(got) != 3 {
 		t.Fatalf("union dedupe: %v", got)

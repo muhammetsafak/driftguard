@@ -34,7 +34,28 @@ driftguard check --strict-stale          # also fail on documented-but-unused ke
 # CI helper: if .env is missing, write a placeholder one from discovered keys
 driftguard seed                          # only acts when GITHUB_ACTIONS / CI is set
 driftguard seed --force                  # act anywhere
+
+# Clean copy-paste / hosting noise out of env files (writes in place)
+driftguard sanitize .env .env.example
+driftguard sanitize --check .env         # report only, exit 1 if dirty (CI gate)
 ```
+
+### `sanitize` — scrub invisible breakage out of env files
+
+Env files hand-edited or pasted from chat apps, docs, and rich-text editors pick up
+characters that a strict loader chokes on but a human can't see in a diff. `sanitize`
+removes them without touching any visible content:
+
+- **UTF-8 BOM** — a leading `﻿` that makes the first key parse as `﻿KEY`.
+- **Zero-width / invisible codepoints** — U+200B (zero width space), U+200C/U+200D
+  (joiners), U+2060 (word joiner), and any mid-line U+FEFF.
+- **CRLF and trailing whitespace** — the classic `\r` / stray space/tab noise.
+
+It is deliberately conservative: only a fixed allow-list of known-invisible codepoints is
+stripped. **NBSP (U+00A0) is preserved** — it's visible as a space and may be intentional
+inside a value, so DriftGuard never silently deletes it. By default `sanitize` rewrites
+each dirty file in place (preserving its mode); `--check` writes nothing and exits `1` if
+any file would change, so you can gate on it in CI.
 
 Example output:
 
@@ -49,7 +70,26 @@ Stale in .env.example (documented, never used):
   - LEGACY_SMTP_HOST
 ```
 
-### In GitHub Actions
+## GitHub Action
+
+DriftGuard ships a composite Action, so you don't have to install the binary yourself:
+
+```yaml
+- uses: muhammetsafak/driftguard@v0.2.0   # pin to a released tag
+  with:
+    dir: .                  # directory to scan (default ".")
+    example: .env.example   # example file to audit against (default ".env.example")
+    # version: latest       # driftguard release to install (default "latest")
+    # seed: "true"          # seed a placeholder .env first (default "false")
+    # env: .env             # env file `seed` writes when missing (default ".env")
+    # args: --strict-stale  # extra flags forwarded to `driftguard check`
+```
+
+The Action runs `driftguard check` and a non-zero exit fails the step, blocking the merge
+on undocumented env keys. Set `seed: "true"` to write a placeholder env file first so a
+strict `--env-file` loader doesn't crash the build before the check runs.
+
+### Or invoke the binary directly
 
 ```yaml
 - run: go install github.com/muhammetsafak/driftguard/cmd/driftguard@latest
@@ -73,8 +113,8 @@ skipped automatically.
 
 | Code | Meaning |
 | ---- | ------- |
-| `0`  | no drift (or `--allow-missing`) |
-| `1`  | drift found (missing keys; or stale with `--strict-stale`) |
+| `0`  | no drift (or `--allow-missing`); `sanitize` clean / written |
+| `1`  | drift found (missing keys; or stale with `--strict-stale`); `sanitize --check` found dirty files |
 | `2`  | usage / IO error |
 
 ## Scope & limits (honest list)

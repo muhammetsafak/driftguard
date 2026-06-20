@@ -1,0 +1,52 @@
+name: DriftGuard
+description: Audit .env.example drift — fail CI when code reads an env key nobody documented
+author: muhammetsafak
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  dir:
+    description: Directory to scan for env-variable usage
+    required: false
+    default: "."
+  example:
+    description: Path to the example env file to audit against (relative to dir, or absolute)
+    required: false
+    default: .env.example
+  env:
+    description: Path to the env file to seed when missing (relative to dir, or absolute)
+    required: false
+    default: .env
+  seed:
+    description: Seed a placeholder env file before checking, so a strict loader doesn't crash the job
+    required: false
+    default: "false"
+  version:
+    description: driftguard version to install (a release tag, or "latest")
+    required: false
+    default: latest
+  args:
+    description: Extra flags passed through to `driftguard check` (e.g. --strict-stale --allow-missing)
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: stable
+
+    - shell: bash
+      run: go install github.com/muhammetsafak/driftguard/cmd/driftguard@${{ inputs.version }}
+
+    # GITHUB_ACTIONS is set by the runner. seed only acts in CI, so it unblocks a strict
+    # --env-file loader before the build without ever writing locally.
+    - if: ${{ inputs.seed == 'true' }}
+      shell: bash
+      run: driftguard seed --example "${{ inputs.example }}" --env "${{ inputs.env }}" "${{ inputs.dir }}"
+
+    # A non-zero exit fails the step and blocks the merge on undocumented env keys.
+    - shell: bash
+      run: driftguard check --example "${{ inputs.example }}" ${{ inputs.args }} "${{ inputs.dir }}"
