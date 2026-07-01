@@ -103,7 +103,7 @@ strict `--env-file` loader doesn't crash the build before the check runs.
 | --------------- | ---------------------------------- | ------ |
 | Go              | `.go`                              | `os.Getenv`, `os.LookupEnv` |
 | JS / TS / Deno  | `.js .jsx .ts .tsx .mjs .cjs`      | `process.env.X`, `process.env['X']`, `Deno.env.get('X')` |
-| PHP             | `.php`                             | `getenv()`, `$_ENV[]`, `$_SERVER[]`, `env()` |
+| PHP             | `.php`                             | `getenv()`, `$_ENV[]`, `$_SERVER[]`, `env()`, `array_key_exists('K', $_ENV/$_SERVER)` |
 | Python          | `.py`                              | `os.environ[]`, `os.environ.get()`, `os.getenv()` |
 
 Vendored / generated directories (`node_modules`, `vendor`, `dist`, `.venv`, …) are
@@ -119,9 +119,15 @@ skipped automatically.
 
 ## Scope & limits (honest list)
 
-- **Precision over recall.** It extracts **literal, statically-knowable** keys only.
-  A computed name (`process.env['PREFIX_' + name]`) is invisible — by design, so the
-  tool never guesses.
+- **Precision over recall.** It records only **literal, statically-knowable** keys as
+  drift — a computed name (`process.env['PREFIX_' + name]`) is never guessed. Non-literal
+  access is instead surfaced as an advisory **"dynamic env access"** blind spot: listed
+  for manual review, but it never adds a key and never fails the build. Detected across
+  all four languages:
+  - **Go** — `os.Getenv(name)`, `os.LookupEnv(x)` (a `` `raw` `` string counts as literal).
+  - **JS/TS** — `process.env[x]`, `` process.env[`${x}`] ``, `Deno.env.get(x)`.
+  - **Python** — `os.environ[x]`, `os.environ.get(x)`, `os.getenv(f"PRE_{x}")`.
+  - **PHP** — `getenv($x)`, `$_ENV[$x]`, `env($x)`, and `$$var` on a line that also touches env.
 - **Regex, not AST (for now).** It matches the canonical idioms above; an exotic wrapper
   around env access won't be seen. AST-backed scanning is on the roadmap.
 - **Placeholder values are empty**, never fabricated secrets — present enough to satisfy

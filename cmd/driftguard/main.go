@@ -6,6 +6,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -72,34 +73,42 @@ func runCheck(args []string) int {
 	out := os.Stdout
 	fmt.Fprintf(out, "Scanned %s — %d env key(s) referenced in code.\n", dir, len(used))
 
+	code := reportDrift(out, res, used, ef.Keys, exists, *example, *allowMissing, *strictStale)
+	reportDynamic(out, res)
+	return code
+}
+
+// reportDrift prints the missing/stale findings and returns the check's exit code.
+// It never considers dynamic accesses — those are advisory only (see reportDynamic).
+func reportDrift(out io.Writer, res scan.Result, used, declared []string, exists bool, example string, allowMissing, strictStale bool) int {
 	if !exists {
 		if len(used) == 0 {
-			fmt.Fprintf(out, "No %s and no env usage found — nothing to check.\n", *example)
+			fmt.Fprintf(out, "No %s and no env usage found — nothing to check.\n", example)
 			return 0
 		}
-		fmt.Fprintf(out, "\nNo %s found. Every used key is undocumented:\n", *example)
+		fmt.Fprintf(out, "\nNo %s found. Every used key is undocumented:\n", example)
 		for _, k := range used {
 			loc := res.Keys[k]
 			fmt.Fprintf(out, "  + %-30s %s:%d\n", k, loc.File, loc.Line)
 		}
-		fmt.Fprintf(out, "\nCreate %s with these keys to fix.\n", *example)
-		if *allowMissing {
+		fmt.Fprintf(out, "\nCreate %s with these keys to fix.\n", example)
+		if allowMissing {
 			return 0
 		}
 		return 1
 	}
 
-	missing, stale := drift.Diff(used, ef.Keys)
+	missing, stale := drift.Diff(used, declared)
 
 	if len(missing) > 0 {
-		fmt.Fprintf(out, "\nMissing from %s (used in code, not documented):\n", *example)
+		fmt.Fprintf(out, "\nMissing from %s (used in code, not documented):\n", example)
 		for _, k := range missing {
 			loc := res.Keys[k]
 			fmt.Fprintf(out, "  + %-30s %s:%d\n", k, loc.File, loc.Line)
 		}
 	}
 	if len(stale) > 0 {
-		fmt.Fprintf(out, "\nStale in %s (documented, never used):\n", *example)
+		fmt.Fprintf(out, "\nStale in %s (documented, never used):\n", example)
 		for _, k := range stale {
 			fmt.Fprintf(out, "  - %s\n", k)
 		}
@@ -109,13 +118,28 @@ func runCheck(args []string) int {
 		return 0
 	}
 
-	if len(missing) > 0 && !*allowMissing {
+	if len(missing) > 0 && !allowMissing {
 		return 1
 	}
-	if len(stale) > 0 && *strictStale {
+	if len(stale) > 0 && strictStale {
 		return 1
 	}
 	return 0
+}
+
+// reportDynamic lists non-literal env accesses (getenv($x), $_ENV[$x], PHP
+// variable-variables, …) as a blind-spot advisory. These keys can't be known
+// statically, so they are surfaced for manual review but never fail the build.
+func reportDynamic(out io.Writer, res scan.Result) {
+	dyn := res.SortedDynamic()
+	if len(dyn) == 0 {
+		return
+	}
+	fmt.Fprintln(out, "\nDynamic env access — non-literal keys DriftGuard can't resolve (review manually):")
+	for _, d := range dyn {
+		fmt.Fprintf(out, "  ? %s:%d\t%s\n", d.File, d.Line, d.Snippet)
+	}
+	fmt.Fprintf(out, "\n%d dynamic access(es) left unchecked; this does not fail the build.\n", len(dyn))
 }
 
 func runSeed(args []string) int {
