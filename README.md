@@ -75,7 +75,7 @@ Stale in .env.example (documented, never used):
 DriftGuard ships a composite Action, so you don't have to install the binary yourself:
 
 ```yaml
-- uses: muhammetsafak/driftguard@v0.2.0   # pin to a released tag
+- uses: muhammetsafak/driftguard@v0.3.0   # pin to a released tag
   with:
     dir: .                  # directory to scan (default ".")
     example: .env.example   # example file to audit against (default ".env.example")
